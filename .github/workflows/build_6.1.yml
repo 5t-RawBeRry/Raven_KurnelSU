@@ -74,7 +74,6 @@ jobs:
           echo kernelVersion=$kernelVersion >> $GITHUB_ENV
           echo "pathKSU=Raven-${kernelVersion}_KSU-${{ needs.check_kernelsu_update.outputs.kernelsu_v }}" >> $GITHUB_ENV
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
       - name: Compile the kernel (Kleaf)
         run: |
