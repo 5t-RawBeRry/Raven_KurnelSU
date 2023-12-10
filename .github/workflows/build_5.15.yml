@@ -56,7 +56,7 @@ jobs:
         run: |
           mkdir ~/android-kernel && cd ~/android-kernel
           repo init --depth=1 -u https://android.googlesource.com/kernel/manifest -b ${{ env.KERNEL_MANIFEST_BRANCH }}
-          sed -i '7s/revision="android13-5.15"/revision="android14-5.15"/' .repo/manifests/default.xml
+          #sed -i '7s/revision="android13-5.15"/revision="android14-5.15"/' .repo/manifests/default.xml
           repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
       - name: Update the vendor ramdisk
