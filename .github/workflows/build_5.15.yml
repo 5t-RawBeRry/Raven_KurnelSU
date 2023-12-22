@@ -1,0 +1,121 @@
+name: Build 5.15
+
+on:
+  workflow_dispatch:
+    inputs:
+
+  schedule:
+    - cron: "50 9,21 * * *"
+
+env:
+  device: Raven
+  KERNEL_MANIFEST_BRANCH: gs-android13-gs-raviole-5.15
+  FIRMWARE_DOWNLOAD_URL: https://dl.google.com/dl/android/aosp/raven-uq1a.231205.015-factory-4f0bf638.zip
+  FIRMWARE_NAME: raven-uq1a.231205.015
+
+jobs:
+  check_kernelsu_update:
+    name: check kernelsu update
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install common package
+        run: |
+          sudo apt update
+          sudo apt install -y curl jq
+
+      - name: Check kernelsu release
+        id: check_kernelsu_release
+        run: |
+          kernelsu_release=`curl https://api.github.com/repos/tiann/KernelSU/releases/latest | jq -r .tag_name`
+          local_release=`curl --header 'authorization: Bearer ${{ github.token }}' https://api.github.com/repos/${{ github.repository }}/releases/latest | jq -r .tag_name`
+
+          echo $kernelsu_release
+          echo $local_release
+
+          echo kernelsu_release=$kernelsu_release >> $GITHUB_OUTPUT
+          echo local_release=$local_release >> $GITHUB_OUTPUT
+
+    outputs:
+      kernelsu_release: ${{ steps.check_kernelsu_release.outputs.kernelsu_release }}_5.15
+      kernelsu_v: ${{ steps.check_kernelsu_release.outputs.kernelsu_release }}
+      local_release: ${{ steps.check_kernelsu_release.outputs.local_release }}_5.15
+
+  build:
+    needs: check_kernelsu_update
+    if: needs.check_kernelsu_update.outputs.kernelsu_release != needs.check_kernelsu_update.outputs.local_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Install common package
+        run: |
+          sudo apt update
+          sudo apt install -y git repo curl zip
+
+      - name: Sync the kernel repository
+        run: |
+          mkdir ~/android-kernel && cd ~/android-kernel
+          repo init --depth=1 -u https://android.googlesource.com/kernel/manifest -b ${{ env.KERNEL_MANIFEST_BRANCH }}
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+
+      - name: Update the vendor ramdisk
+        run: |
+          curl -o ${{ env.FIRMWARE_NAME}}.zip ${{ env.FIRMWARE_DOWNLOAD_URL }}
+          unzip ${{ env.FIRMWARE_NAME}}.zip
+          cd ${{ env.FIRMWARE_NAME}}
+          unzip image-${{ env.FIRMWARE_NAME}}.zip vendor_boot.img
+          ~/android-kernel/tools/mkbootimg/unpack_bootimg.py --boot_img vendor_boot.img --out vendor_boot_out
+          cp vendor_boot_out/vendor-ramdisk-by-name/ramdisk_ ~/android-kernel/prebuilts/boot-artifacts/ramdisks/vendor_ramdisk-oriole.img
+
+      - name: Injecting KernelSU
+        run: |
+          cd ~/android-kernel/common
+          kernelVersion=$(grep -Eo 'VERSION = [0-9]+|PATCHLEVEL = [0-9]+|SUBLEVEL = [0-9]+|EXTRAVERSION = [0-9a-zA-Z_-]+' Makefile | awk '{print $3}' | tr '\n' '.' | sed 's/\.$//')
+          echo kernelVersion=$kernelVersion >> $GITHUB_ENV
+          echo "pathKSU=Raven-${kernelVersion}_KSU-${{ needs.check_kernelsu_update.outputs.kernelsu_v }}" >> $GITHUB_ENV
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+
+      - name: Compile the kernel (Kleaf)
+        run: |
+          cd ~/android-kernel/
+          tools/bazel run --lto=thin //gs/google-modules/soc-modules:slider_dist
+
+      - name: Pack the kernel
+        run: |
+          cd ~/
+          mkdir ${{ env.pathKSU }} && cd ${{ env.pathKSU }}
+          cp /home/runner/android-kernel/out/android13-5.15/dist/boot.img ./
+          cp /home/runner/android-kernel/out/android13-5.15/dist/dtbo.img ./
+          cp /home/runner/android-kernel/out/android13-5.15/dist/vendor_boot.img ./
+          cp /home/runner/android-kernel/out/android13-5.15/dist/vendor_dlkm.img ./
+          cd ~/ && zip -r -9 ${{ env.pathKSU }}.zip ${{ env.pathKSU }}
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.check_kernelsu_update.outputs.kernelsu_release }}
+          body: |
+            Device: **${{ env.device }}**
+
+            Kernel Version: **${{ env.kernelVersion }}**
+
+            **[Download firmware: ${{ env.FIRMWARE_NAME }}](${{ env.FIRMWARE_DOWNLOAD_URL }})**
+
+            KernelSU: **[${{ needs.check_kernelsu_update.outputs.kernelsu_v }}](https://github.com/tiann/KernelSU/releases/tag/${{ needs.check_kernelsu_update.outputs.kernelsu_v }})**           
+
+            **How to flash this kernel**
+
+            ```bash
+            unzip ${{ env.pathKSU }}.zip
+            cd ${{ env.pathKSU }}
+            fastboot oem disable-verification
+            fastboot flash boot boot.img
+            fastboot flash dtbo dtbo.img
+            fastboot flash vendor_boot vendor_boot.img
+            fastboot reboot fastboot
+            fastboot flash vendor_dlkm vendor_dlkm.img
+            fastboot reboot
+            ```
+
+          files: |
+            /home/runner/${{ env.pathKSU }}.zip
